@@ -48,7 +48,6 @@ cat "$TFTPBOOT_DIR/cmdline.txt"
 
 # Create temporary directory for minirootfs work
 WORK_DIR=$(mktemp -d)
-trap "rm -rf $WORK_DIR" EXIT
 cd "$WORK_DIR"
 
 # Download Alpine minirootfs for arm64
@@ -81,14 +80,15 @@ mount --bind /sys rootfs/sys 2>/dev/null || echo "Warning: Could not mount /sys 
 mount --bind /dev rootfs/dev 2>/dev/null || echo "Warning: Could not mount /dev (may need sudo)"
 mount -t tmpfs tmpfs rootfs/tmp 2>/dev/null || echo "Warning: Could not mount tmpfs (may need sudo)"
 
-# Function to cleanup mounts
-cleanup_mounts() {
+# Function to cleanup mounts and work directory
+cleanup() {
     umount rootfs/tmp 2>/dev/null || true
     umount rootfs/dev 2>/dev/null || true
     umount rootfs/sys 2>/dev/null || true
     umount rootfs/proc 2>/dev/null || true
+    rm -rf "$WORK_DIR" 2>/dev/null || true
 }
-trap cleanup_mounts EXIT
+trap cleanup EXIT
 
 # Install packages in chroot
 echo "Installing packages in chroot..."
@@ -209,8 +209,8 @@ tar -czf "$TFTPBOOT_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
 
 echo "APKOVL created at: $TFTPBOOT_DIR/${RPI_NAME}.apkovl.tar.gz"
 
-# Cleanup
-cleanup_mounts
+# Cleanup (trap will handle this on exit, but explicit cleanup here too)
+cleanup
 
 echo ""
 echo "Setup complete!"
