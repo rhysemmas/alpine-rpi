@@ -7,12 +7,12 @@ RPI_NAME='cp1'
 # Get latest Alpine major release version
 echo "Getting latest Alpine version..."
 # Try to get from latest-stable releases directory
-ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/arm64/ | \
+ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/ | \
                  grep -oP 'alpine-minirootfs-\K\d+\.\d+\.\d+' | sort -V -t. -k1,1n -k2,2n -k3,3n | tail -1 | cut -d. -f1-2)
 
 if [ -z "$ALPINE_VERSION" ]; then
     # Fallback: try parsing from HTML or use a known recent version
-    ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/arm64/ | \
+    ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/ | \
                      grep -oP 'v\d+\.\d+' | head -1 | sed 's/v//' || echo "3.20")
 fi
 
@@ -50,16 +50,16 @@ cat "$TFTPBOOT_DIR/cmdline.txt"
 WORK_DIR=$(mktemp -d)
 cd "$WORK_DIR"
 
-# Download Alpine minirootfs for arm64
-echo "Downloading Alpine minirootfs for arm64..."
+# Download Alpine minirootfs for aarch64
+echo "Downloading Alpine minirootfs for aarch64..."
 # Get the latest patch version for the major.minor version
-LATEST_PATCH=$(curl -s "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/arm64/" | \
+LATEST_PATCH=$(curl -s "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/" | \
                grep -oP "alpine-minirootfs-${ALPINE_VERSION//./\\.}\.\K\d+" | sort -n | tail -1 || echo "0")
-MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/arm64/alpine-minirootfs-${ALPINE_VERSION}.${LATEST_PATCH}-aarch64.tar.gz"
+MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/alpine-minirootfs-${ALPINE_VERSION}.${LATEST_PATCH}-aarch64.tar.gz"
 echo "Downloading from: $MINIROOTFS_URL"
 curl -L -f -o alpine-minirootfs.tar.gz "$MINIROOTFS_URL" || {
     # Fallback to latest-stable symlink
-    MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/arm64/alpine-minirootfs-${ALPINE_VERSION}.0-aarch64.tar.gz"
+    MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/alpine-minirootfs-${ALPINE_VERSION}.0-aarch64.tar.gz"
     curl -L -f -o alpine-minirootfs.tar.gz "$MINIROOTFS_URL"
 }
 
