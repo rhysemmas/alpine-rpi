@@ -75,33 +75,17 @@ if [ "$EUID" -ne 0 ]; then
     echo "Warning: Not running as root. Mounts may fail. Consider running with sudo."
 fi
 
-mount --bind /proc rootfs/proc 2>/dev/null || echo "Warning: Could not mount /proc (may need sudo)"
-mount --bind /sys rootfs/sys 2>/dev/null || echo "Warning: Could not mount /sys (may need sudo)"
-mount --bind /dev rootfs/dev 2>/dev/null || echo "Warning: Could not mount /dev (may need sudo)"
-mount -t tmpfs tmpfs rootfs/tmp 2>/dev/null || echo "Warning: Could not mount tmpfs (may need sudo)"
+mount --bind /proc rootfs/proc || echo "Warning: Could not mount /proc (may need sudo)"
+mount --bind /sys rootfs/sys || echo "Warning: Could not mount /sys (may need sudo)"
+mount --bind /dev rootfs/dev || echo "Warning: Could not mount /dev (may need sudo)"
+mount -t tmpfs tmpfs rootfs/tmp || echo "Warning: Could not mount tmpfs (may need sudo)"
 
 # Function to cleanup mounts and work directory
 cleanup() {
-    # Safety check: only proceed if WORK_DIR is set and is a temp directory
-    if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
-        return
-    fi
-    # Verify it's actually a temp directory (safety check)
-    if [[ "$WORK_DIR" != /tmp/* ]]; then
-        return
-    fi
-    
-    # Unmount in reverse order
-    if [ -d "$WORK_DIR/rootfs" ]; then
-        umount "$WORK_DIR/rootfs/tmp" || true
-        umount "$WORK_DIR/rootfs/dev" || true
-        umount "$WORK_DIR/rootfs/sys" || true
-        umount "$WORK_DIR/rootfs/proc" || true
-    fi
-    # Only remove if still a temp directory (double-check)
-    if [[ "$WORK_DIR" == /tmp/* ]] && [ -d "$WORK_DIR" ]; then
-        rm -rf "$WORK_DIR" || true
-    fi
+    umount "$WORK_DIR/rootfs/tmp" 
+    umount "$WORK_DIR/rootfs/dev" 
+    umount "$WORK_DIR/rootfs/sys" 
+    umount "$WORK_DIR/rootfs/proc"
 }
 trap cleanup EXIT
 
