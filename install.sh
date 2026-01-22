@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Initialize variables
+# Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='cp1'
 
 # Get latest Alpine major release version
@@ -18,8 +18,12 @@ fi
 
 echo "Using Alpine version: $ALPINE_VERSION"
 
+# Create http apkovl directory
+HTTP_APKOVL_DIR="/srv/http/$RPI_NAME"
+mkdir -p "$HTTP_APKOVL_DIR"
+
 # Create tftpboot directory
-TFTPBOOT_DIR="/srv/tftpboot/$ALPINE_VERSION-cursor"
+TFTPBOOT_DIR="/srv/tftpboot/build/alpine-$ALPINE_VERSION-cursor"
 mkdir -p "$TFTPBOOT_DIR"
 
 # Download RPI4 firmware files from GitHub
@@ -29,17 +33,18 @@ cd "$TFTPBOOT_DIR"
 
 curl -L -o fixup4.dat "$FIRMWARE_BASE_URL/fixup4.dat" || curl -L -o fixup4.dat "$FIRMWARE_BASE_URL/fixup4cd.dat"
 curl -L -o start4.elf "$FIRMWARE_BASE_URL/start4.elf" || curl -L -o start4.elf "$FIRMWARE_BASE_URL/start4cd.elf"
-curl -L -o bcm2711-rpi-4-b.dtb "$FIRMWARE_BASE_URL/bcm2711-rpi-4-b.dtb"
 
 # Download Alpine kernel and initramfs for RPI4
 echo "Downloading Alpine kernel and initramfs for RPI4..."
 ALPINE_NETBOOT_BASE="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot"
-curl -L -o kernel8.img "$ALPINE_NETBOOT_BASE/vmlinuz-rpi4"
-curl -L -o initramfs-rpi "$ALPINE_NETBOOT_BASE/initramfs-rpi4"
+curl -L -o kernel8.img "$ALPINE_NETBOOT_BASE/vmlinuz-rpi"
+curl -L -o initramfs-rpi "$ALPINE_NETBOOT_BASE/initramfs-rpi"
+curl -L -o bcm2711-rpi-4-b.dtb "$ALPINE_NETBOOT_BASE/dtbs-lts/broadcom/bcm2711-rpi-4-b.dtb"
 
 # Configure cmdline.txt for Alpine
 echo "Creating cmdline.txt..."
 cat > "$TFTPBOOT_DIR/cmdline.txt" <<EOF
+# TODO: modloop
 modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main apkovl=http://192.168.1.2/${RPI_NAME}.apkovl.tar.gz
 EOF
 
@@ -75,10 +80,10 @@ if [ "$EUID" -ne 0 ]; then
     echo "Warning: Not running as root. Mounts may fail. Consider running with sudo."
 fi
 
-mount --bind /proc rootfs/proc || echo "Warning: Could not mount /proc (may need sudo)"
-mount --bind /sys rootfs/sys || echo "Warning: Could not mount /sys (may need sudo)"
-mount --bind /dev rootfs/dev || echo "Warning: Could not mount /dev (may need sudo)"
-mount -t tmpfs tmpfs rootfs/tmp || echo "Warning: Could not mount tmpfs (may need sudo)"
+mount --bind /proc rootfs/proc 
+mount --bind /sys rootfs/sys 
+mount --bind /dev rootfs/dev 
+mount -t tmpfs tmpfs rootfs/tmp 
 
 # Function to cleanup mounts and work directory
 cleanup() {
@@ -204,9 +209,12 @@ fi
 
 # Create apkovl tar.gz (Alpine expects this format)
 cd "$APKOVL_DIR"
-tar -czf "$TFTPBOOT_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
+tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
+# TODO: version apkovl
+echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
-echo "APKOVL created at: $TFTPBOOT_DIR/${RPI_NAME}.apkovl.tar.gz"
+ln -s $TFTPBOOT_DIR /srv/tftpboot/images/bootfs-current
+echo "Made version alpine-$ALPINE_VERSION-cursor the current bootfs"
 
 # Cleanup (trap will handle this on exit, but explicit cleanup here too)
 cleanup
@@ -214,6 +222,4 @@ cleanup
 echo ""
 echo "Setup complete!"
 echo "Files are in: $TFTPBOOT_DIR"
-echo "APKOVL file: $TFTPBOOT_DIR/${RPI_NAME}.apkovl.tar.gz"
-echo ""
-echo "Make sure to serve the apkovl file via HTTP at: http://192.168.1.2/${RPI_NAME}.apkovl.tar.gz"
+echo "APKOVL file: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
