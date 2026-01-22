@@ -87,7 +87,7 @@ mount -t tmpfs tmpfs rootfs/tmp
 
 # Function to cleanup mounts and work directory
 cleanup() {
-    umount "$WORK_DIR/rootfs/tmp" 
+    #umount "$WORK_DIR/rootfs/tmp" 
     umount "$WORK_DIR/rootfs/dev" 
     umount "$WORK_DIR/rootfs/sys" 
     umount "$WORK_DIR/rootfs/proc"
@@ -213,7 +213,8 @@ tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
 # TODO: version apkovl
 echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
-ln -s $TFTPBOOT_DIR /srv/tftpboot/images/bootfs-current
+unlink /srv/tftpboot/images/bootfs-current
+ln -sf $TFTPBOOT_DIR /srv/tftpboot/images/bootfs-current
 echo "Made version alpine-$ALPINE_VERSION-cursor the current bootfs"
 
 # Cleanup (trap will handle this on exit, but explicit cleanup here too)
