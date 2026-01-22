@@ -82,11 +82,26 @@ mount -t tmpfs tmpfs rootfs/tmp 2>/dev/null || echo "Warning: Could not mount tm
 
 # Function to cleanup mounts and work directory
 cleanup() {
-    umount rootfs/tmp 2>/dev/null || true
-    umount rootfs/dev 2>/dev/null || true
-    umount rootfs/sys 2>/dev/null || true
-    umount rootfs/proc 2>/dev/null || true
-    rm -rf "$WORK_DIR" 2>/dev/null || true
+    # Safety check: only proceed if WORK_DIR is set and is a temp directory
+    if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+        return
+    fi
+    # Verify it's actually a temp directory (safety check)
+    if [[ "$WORK_DIR" != /tmp/* ]]; then
+        return
+    fi
+    
+    # Unmount in reverse order
+    if [ -d "$WORK_DIR/rootfs" ]; then
+        umount "$WORK_DIR/rootfs/tmp" || true
+        umount "$WORK_DIR/rootfs/dev" || true
+        umount "$WORK_DIR/rootfs/sys" || true
+        umount "$WORK_DIR/rootfs/proc" || true
+    fi
+    # Only remove if still a temp directory (double-check)
+    if [[ "$WORK_DIR" == /tmp/* ]] && [ -d "$WORK_DIR" ]; then
+        rm -rf "$WORK_DIR" || true
+    fi
 }
 trap cleanup EXIT
 
