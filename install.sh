@@ -29,6 +29,13 @@ cd "$TFTPBOOT_DIR"
 
 curl -L -o fixup4.dat "$FIRMWARE_BASE_URL/fixup4.dat" || curl -L -o fixup4.dat "$FIRMWARE_BASE_URL/fixup4cd.dat"
 curl -L -o start4.elf "$FIRMWARE_BASE_URL/start4.elf" || curl -L -o start4.elf "$FIRMWARE_BASE_URL/start4cd.elf"
+curl -L -o bcm2711-rpi-4-b.dtb "$FIRMWARE_BASE_URL/bcm2711-rpi-4-b.dtb"
+
+# Download Alpine kernel and initramfs for RPI4
+echo "Downloading Alpine kernel and initramfs for RPI4..."
+ALPINE_NETBOOT_BASE="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot"
+curl -L -o kernel8.img "$ALPINE_NETBOOT_BASE/vmlinuz-rpi4"
+curl -L -o initramfs-rpi "$ALPINE_NETBOOT_BASE/initramfs-rpi4"
 
 # Configure cmdline.txt for Alpine
 echo "Creating cmdline.txt..."
