@@ -19,7 +19,7 @@ fi
 echo "Using Alpine version: $ALPINE_VERSION"
 
 # Create tftpboot directory
-TFTPBOOT_DIR="/srv/tftpboot/$ALPINE_VERSION"
+TFTPBOOT_DIR="/srv/tftpboot/$ALPINE_VERSION-cursor"
 mkdir -p "$TFTPBOOT_DIR"
 
 # Download RPI4 firmware files from GitHub
