@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# TO REBOOT POE ON SWITCH
+# ENABLE PORT 23:  snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 1
+# DISABLE PORT 23: snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 2
+
+# TODO: cache artifacts downloaded from alpine/github
+# TODO: install k3s, join cluster
+# TODO: remove ssh hostkey from nas for installed pi
+# TODO: how to do rolling upgrades?
+# TODO: host alpine repo and modloop on local http server
+
 # Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='cp1'
 
@@ -13,7 +23,7 @@ ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/rel
 if [ -z "$ALPINE_VERSION" ]; then
     # Fallback: try parsing from HTML or use a known recent version
     ALPINE_VERSION=$(curl -s https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/ | \
-                     grep -oP 'v\d+\.\d+' | head -1 | sed 's/v//' || echo "3.20")
+                     grep -oP 'v\d+\.\d+' | head -1 | sed 's/v//' || echo "3.23")
 fi
 
 echo "Using Alpine version: $ALPINE_VERSION"
@@ -44,12 +54,30 @@ curl -L -o bcm2711-rpi-4-b.dtb "$ALPINE_NETBOOT_BASE/dtbs-lts/broadcom/bcm2711-r
 # Configure cmdline.txt for Alpine
 echo "Creating cmdline.txt..."
 cat > "$TFTPBOOT_DIR/cmdline.txt" <<EOF
-# TODO: modloop
-modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main apkovl=http://192.168.1.2/${RPI_NAME}.apkovl.tar.gz
+modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main modloop=https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot/modloop-rpi apkovl=http://192.168.1.2:8080/${RPI_NAME}.apkovl.tar.gz
 EOF
 
 echo "cmdline.txt created with content:"
 cat "$TFTPBOOT_DIR/cmdline.txt"
+
+echo "Creating config.txt..."
+cat > "${TFTPBOOT_DIR}/config.txt" <<EOF
+[pi4]
+arm_64bit=1
+enable_uart=1
+gpu_mem=16
+
+kernel=kernel8.img
+device_tree=bcm2711-rpi-4-b.dtb
+
+initramfs initramfs-rpi followkernel
+
+start_file=start4.elf
+fixup_file=fixup4.dat
+EOF
+
+echo "config.txt created with content:"
+cat "$TFTPBOOT_DIR/config.txt"
 
 # Create temporary directory for minirootfs work
 WORK_DIR=$(mktemp -d)
@@ -80,74 +108,71 @@ if [ "$EUID" -ne 0 ]; then
     echo "Warning: Not running as root. Mounts may fail. Consider running with sudo."
 fi
 
-mount --bind /proc rootfs/proc 
-mount --bind /sys rootfs/sys 
-mount --bind /dev rootfs/dev 
-mount -t tmpfs tmpfs rootfs/tmp 
+mount --bind /proc rootfs/proc
+mount --bind /sys rootfs/sys
+mount --bind /dev rootfs/dev
+mount -t tmpfs tmpfs rootfs/tmp
 
 # Function to cleanup mounts and work directory
 cleanup() {
-    umount "$WORK_DIR/rootfs/tmp" 
-    umount "$WORK_DIR/rootfs/dev" 
-    umount "$WORK_DIR/rootfs/sys" 
+    umount "$WORK_DIR/rootfs/tmp"
+    umount "$WORK_DIR/rootfs/dev"
+    umount "$WORK_DIR/rootfs/sys"
     umount "$WORK_DIR/rootfs/proc"
 }
 trap cleanup EXIT
 
 # Install packages in chroot
-echo "Installing packages in chroot..."
+echo "Installing packages in chroot and enabling them..."
 chroot rootfs /bin/sh -c "
     apk update
-    apk add --no-cache alpine-base alpine-conf openssh chrony
+    apk add --no-cache alpine-base alpine-conf openssh chrony tzdata
+    rc-update add networking boot
+    rc-update add sshd default
+    rc-update add chronyd default
 "
 
-# Create answers file for setup-alpine (diskless/memory-only mode)
-echo "Creating answers file for diskless operation..."
-cat > rootfs/answers <<EOF
-KEYMAPOPTS="us us"
-HOSTNAMEOPTS="-n $RPI_NAME"
-INTERFACESOPTS="auto lo
+echo "Creating alpine boot script..."
+echo "===> Enabling interfaces"
+touch rootfs/etc/network/interfaces
+cat rootfs/etc/network/interfaces <<EOF
+auto lo
 iface lo inet loopback
 
 auto eth0
-iface eth0 inet dhcp"
-DNSOPTS="-d example.com 8.8.8.8"
-TIMEZONEOPTS="-z UTC"
-PROXYOPTS="none"
-APKREPOSOPTS="-1"
-SSHDOPTS="-c openssh"
-NTPOPTS="-c chrony"
-DISKOPTS="-m none"
+iface eth0 inet dhcp
 EOF
 
-# Create OpenRC unit to run setup-alpine non-interactively
+echo "===> Setting hostname"
+echo $RPI_NAME > rootfs/etc/hostname
+
+# Create OpenRC unit to set hostname
 echo "Creating OpenRC unit..."
 mkdir -p rootfs/etc/init.d
 cat > rootfs/etc/init.d/setup-alpine <<'EOF'
 #!/sbin/openrc-run
-command="/sbin/setup-alpine"
-command_args="-f /answers"
 pidfile="/var/run/setup-alpine.pid"
 
 depend() {
     need localmount
-    before networking
+    before net
 }
 
 start() {
-    ebegin "Running setup-alpine"
-    if [ -f /answers ]; then
-        /sbin/setup-alpine -f /answers
-        eend $?
-    else
-        eend 1 "Answers file not found"
-    fi
+    ebegin "Setting up alpine"
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILf9JtMcqA3yGPAyqVIbbucYBPHKnPfgI/YcKDD64saT pi@nas" > /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+
+    hostname $(cat /etc/hostname)
+    eend
 }
 EOF
 chmod +x rootfs/etc/init.d/setup-alpine
 
 # Enable the service in the boot runlevel so it runs automatically
-echo "Enabling setup-alpine service in boot runlevel..."
+echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
@@ -156,9 +181,9 @@ echo "Configuring SSH..."
 mkdir -p rootfs/etc/ssh
 cat >> rootfs/etc/ssh/sshd_config <<EOF
 
-# Allow root login without password
+# Allow root login, deny password
 PermitRootLogin yes
-PasswordAuthentication yes
+PasswordAuthentication no
 EOF
 
 # Create empty root password (for passwordless login)
@@ -194,16 +219,11 @@ mkdir -p "$APKOVL_DIR/etc"
 if [ -d rootfs/etc ]; then
     # Copy /etc directory structure
     cp -a rootfs/etc/* "$APKOVL_DIR/etc/" 2>/dev/null || true
-    
+
     # Ensure /etc/apk/world exists if packages were installed
     if [ ! -f "$APKOVL_DIR/etc/apk/world" ] && [ -f rootfs/etc/apk/world ]; then
         mkdir -p "$APKOVL_DIR/etc/apk"
         cp rootfs/etc/apk/world "$APKOVL_DIR/etc/apk/world" 2>/dev/null || true
-    fi
-    
-    # Ensure answers file is in apkovl
-    if [ -f rootfs/answers ]; then
-        cp rootfs/answers "$APKOVL_DIR/etc/" 2>/dev/null || true
     fi
 fi
 
@@ -212,6 +232,9 @@ cd "$APKOVL_DIR"
 tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
 # TODO: version apkovl
 echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
+
+echo "Deleting host from known ssh hosts..."
+ssh-keygen -f '/home/pi/.ssh/known_hosts' -R '192.168.1.101'
 
 unlink /srv/tftpboot/images/bootfs-current
 ln -sf $TFTPBOOT_DIR /srv/tftpboot/images/bootfs-current
