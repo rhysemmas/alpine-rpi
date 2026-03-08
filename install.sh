@@ -412,9 +412,20 @@ if [ -d rootfs/etc ]; then
     fi
 fi
 
+# iptables-legacy in apkovl so running system uses it (diskless root comes from netboot base, not our chroot)
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    mkdir -p "$APKOVL_DIR/usr/local/bin"
+    ln -sf /usr/sbin/iptables-legacy "$APKOVL_DIR/usr/local/bin/iptables"
+    ln -sf /usr/sbin/ip6tables-legacy "$APKOVL_DIR/usr/local/bin/ip6tables"
+fi
+
 # Create apkovl tar.gz (Alpine expects this format)
 cd "$APKOVL_DIR"
-tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/ usr/
+else
+    tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
+fi
 # TODO: version apkovl
 echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
