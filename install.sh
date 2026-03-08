@@ -155,16 +155,6 @@ chroot rootfs /bin/sh -c "
     rc-update add chronyd default
 "
 
-# Prefer iptables-legacy in PATH so k3s uses it (nft backend fails with "Protocol not supported" on RPi)
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    echo "Linking iptables/ip6tables to legacy (nft not supported on RPi kernel)..."
-    chroot rootfs /bin/sh -c "
-        mkdir -p /usr/local/bin
-        ln -sf /usr/sbin/iptables-legacy /usr/local/bin/iptables
-        ln -sf /usr/sbin/ip6tables-legacy /usr/local/bin/ip6tables
-    "
-fi
-
 echo "Creating alpine boot script..."
 echo "===> Enabling interfaces"
 touch rootfs/etc/network/interfaces
@@ -319,6 +309,11 @@ depend() {
 }
 
 start_pre() {
+    # Use iptables-legacy at boot (apkovl only overlays /etc; create symlinks so k3s finds them via PATH)
+    mkdir -p /usr/local/bin
+    ln -sf /usr/sbin/iptables-legacy /usr/local/bin/iptables
+    ln -sf /usr/sbin/ip6tables-legacy /usr/local/bin/ip6tables
+
     # Install k3s binary if missing (diskless: no persistence, so reinstall each boot)
     if [ ! -x /usr/local/bin/k3s ]; then
         ebegin "Installing k3s binary"
@@ -407,13 +402,9 @@ if [ -d rootfs/etc ]; then
     fi
 fi
 
-# Create apkovl tar.gz (Alpine expects this format)
+# Create apkovl tar.gz (Alpine expects this format; apkovl overlays /etc only)
 cd "$APKOVL_DIR"
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/ usr/
-else
-    tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
-fi
+tar -czf "$HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz" etc/
 # TODO: version apkovl
 echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
