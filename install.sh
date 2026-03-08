@@ -6,13 +6,28 @@ set -euo pipefail
 # DISABLE PORT 23: snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 2
 
 # TODO: cache artifacts downloaded from alpine/github
-# TODO: install k3s, join cluster
 # TODO: remove ssh hostkey from nas for installed pi
 # TODO: how to do rolling upgrades?
 # TODO: host alpine repo and modloop on local http server
 
 # Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='cp1'
+
+# K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
+# All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
+# Token is reused from file when building multiple cp apkovls so they can join the same cluster.
+K3S_TOKEN_FILE="${K3S_TOKEN_FILE:-/srv/http/.k3s-token}"
+if [[ -n "${K3S_TOKEN:-}" ]]; then
+    : # use provided token
+elif [[ -f "$K3S_TOKEN_FILE" ]]; then
+    K3S_TOKEN=$(cat "$K3S_TOKEN_FILE")
+else
+    K3S_TOKEN=$(openssl rand -hex 32)
+    mkdir -p "$(dirname "$K3S_TOKEN_FILE")"
+    echo "$K3S_TOKEN" > "$K3S_TOKEN_FILE"
+fi
+# Hostnames must resolve at boot (e.g. via DHCP/dnsmasq as in dhcp-hosts.example).
+K3S_CP_NODES="${K3S_CP_NODES:-cp1}"   # Space-separated: all control-plane hostnames (e.g. "cp1 cp2 cp3")
 
 # Get latest Alpine major release version
 echo "Getting latest Alpine version..."
@@ -51,10 +66,12 @@ curl -L -o kernel8.img "$ALPINE_NETBOOT_BASE/vmlinuz-rpi"
 curl -L -o initramfs-rpi "$ALPINE_NETBOOT_BASE/initramfs-rpi"
 curl -L -o bcm2711-rpi-4-b.dtb "$ALPINE_NETBOOT_BASE/dtbs-lts/broadcom/bcm2711-rpi-4-b.dtb"
 
-# Configure cmdline.txt for Alpine
+# Configure cmdline.txt for Alpine (cgroups needed for k3s when RPI_NAME is cp*)
+CMDLINE_EXTRAS=""
+[[ "$RPI_NAME" == cp* ]] && CMDLINE_EXTRAS="cgroup_enable=memory cgroup_memory=1"
 echo "Creating cmdline.txt..."
 cat > "$TFTPBOOT_DIR/cmdline.txt" <<EOF
-modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main modloop=https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot/modloop-rpi apkovl=http://192.168.1.2:8080/${RPI_NAME}.apkovl.tar.gz
+modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main modloop=https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot/modloop-rpi apkovl=http://192.168.1.2:8080/${RPI_NAME}.apkovl.tar.gz $CMDLINE_EXTRAS
 EOF
 
 echo "cmdline.txt created with content:"
@@ -124,9 +141,13 @@ trap cleanup EXIT
 
 # Install packages in chroot
 echo "Installing packages in chroot and enabling them..."
+PKGS="alpine-base alpine-conf openssh chrony tzdata"
+if [[ "$RPI_NAME" == cp* ]]; then
+    PKGS="$PKGS curl iptables"
+fi
 chroot rootfs /bin/sh -c "
     apk update
-    apk add --no-cache alpine-base alpine-conf openssh chrony tzdata
+    apk add --no-cache $PKGS
     rc-update add networking boot
     rc-update add sshd default
     rc-update add chronyd default
@@ -175,6 +196,67 @@ chmod +x rootfs/etc/init.d/setup-alpine
 echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
+
+# K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
+if [[ "$RPI_NAME" == cp* ]]; then
+    echo "Configuring k3s control-plane (join-or-init) for $RPI_NAME..."
+    mkdir -p rootfs/etc/k3s
+    echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
+    echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
+    cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
+#!/sbin/openrc-run
+# Idempotent k3s server: try to join an existing cluster; if no peer responds, cluster-init.
+# Alpine FS is not persisted across reboots; this runs every boot from apkovl.
+
+command="/usr/local/bin/k3s"
+command_background="yes"
+command_args="server"
+pidfile="/run/k3s.pid"
+output_log="/var/log/k3s.log"
+error_log="/var/log/k3s.log"
+
+depend() {
+    need net
+    after setup-alpine
+}
+
+start_pre() {
+    # Install k3s binary if missing (diskless: no persistence, so reinstall each boot)
+    if [ ! -x /usr/local/bin/k3s ]; then
+        ebegin "Installing k3s binary"
+        curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_ENABLE=true sh -
+        eend $?
+    fi
+
+    TOKEN=$(cat /etc/k3s/k3s-token 2>/dev/null)
+    [ -z "$TOKEN" ] && { eend 1 "Missing /etc/k3s/k3s-token"; return 1; }
+
+    MYSELF=$(cat /etc/hostname)
+    JOIN_SERVER=""
+    for peer in $(cat /etc/k3s/k3s-cp-nodes 2>/dev/null); do
+        [ "$peer" = "$MYSELF" ] && continue
+        code=$(curl -k -s -o /dev/null --connect-timeout 3 -w "%{http_code}" "https://${peer}:6443" 2>/dev/null || true)
+        # 401/403 = API up (unauthorized); 200 = OK
+        if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -ge 200 ] 2>/dev/null; then
+            JOIN_SERVER="$peer"
+            break
+        fi
+    done
+
+    if [ -n "$JOIN_SERVER" ]; then
+        einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
+        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN}"
+    else
+        einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
+        command_args="server --cluster-init --token ${TOKEN}"
+    fi
+    return 0
+}
+K3SEOF
+    chmod +x rootfs/etc/init.d/k3s-server
+    mkdir -p rootfs/etc/runlevels/default
+    ln -sf /etc/init.d/k3s-server rootfs/etc/runlevels/default/k3s-server
+fi
 
 # Configure SSH to allow root login with no password
 echo "Configuring SSH..."
