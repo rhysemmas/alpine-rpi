@@ -1,10 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# TO REBOOT POE ON SWITCH
-# ENABLE PORT 23:  snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 1
-# DISABLE PORT 23: snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 2
-
 # TODO: cache artifacts downloaded from alpine/github
 # TODO: remove ssh hostkey from nas for installed pi
 # TODO: how to do rolling upgrades?
@@ -213,36 +209,35 @@ echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
-# Kernel modules required by k3s (netfilter, bridge, overlay); load before k3s so sysctls exist
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    echo "Adding k3s kernel modules service..."
-    cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
+# modloop must run at boot so /lib/modules exists (modprobe, iptables need it). Enable for k3s nodes.
+[ -f rootfs/etc/init.d/modloop ] && ln -sf /etc/init.d/modloop rootfs/etc/runlevels/boot/modloop
+
+# Kernel modules required by k3s (netfilter, bridge, overlay); load after modloop so /lib/modules exists
+echo "Adding k3s kernel modules service..."
+cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
 #!/sbin/openrc-run
-# Ensure /lib/modules exists (modprobe needs it), then load overlay, nf_conntrack, br_netfilter, iptable_*.
+# Load overlay, nf_conntrack, br_netfilter, iptable_* after modloop has set up /lib/modules.
 
 depend() {
-    need localmount
+    need localmount modloop
     before net
 }
 
 start() {
     ebegin "Loading k3s kernel modules"
-    /etc/init.d/modloop start 2>/dev/null || true
     for mod in overlay nf_conntrack br_netfilter iptable_nat iptable_filter; do
         modprobe "$mod" 2>/dev/null || true
     done
     eend 0
 }
 MODEOF
-    chmod +x rootfs/etc/init.d/k3s-modules
-    ln -sf /etc/init.d/k3s-modules rootfs/etc/runlevels/boot/k3s-modules
-fi
+chmod +x rootfs/etc/init.d/k3s-modules
+ln -sf /etc/init.d/k3s-modules rootfs/etc/runlevels/boot/k3s-modules
 
 # Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default).
 # Try cgroup v2 first (unified); Alpine RPi kernel often has no CONFIG_MEMCG for v1 memory.
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    echo "Adding cgroups mount service for k3s..."
-    cat > rootfs/etc/init.d/cgroups <<'CGEOF'
+echo "Adding cgroups mount service for k3s..."
+cat > rootfs/etc/init.d/cgroups <<'CGEOF'
 #!/sbin/openrc-run
 # Mount cgroup v2 (preferred) or v1 at /sys/fs/cgroup for k3s. kubelet needs memory controller.
 
@@ -294,9 +289,8 @@ start() {
     eend 0
 }
 CGEOF
-    chmod +x rootfs/etc/init.d/cgroups
-    ln -sf /etc/init.d/cgroups rootfs/etc/runlevels/boot/cgroups
-fi
+chmod +x rootfs/etc/init.d/cgroups
+ln -sf /etc/init.d/cgroups rootfs/etc/runlevels/boot/cgroups
 
 # K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
 if [[ "$RPI_NAME" == cp* ]]; then
@@ -413,13 +407,6 @@ if [ -d rootfs/etc ]; then
     fi
 fi
 
-# iptables-legacy in apkovl so running system uses it (diskless root comes from netboot base, not our chroot)
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    mkdir -p "$APKOVL_DIR/usr/local/bin"
-    ln -sf /usr/sbin/iptables-legacy "$APKOVL_DIR/usr/local/bin/iptables"
-    ln -sf /usr/sbin/ip6tables-legacy "$APKOVL_DIR/usr/local/bin/ip6tables"
-fi
-
 # Create apkovl tar.gz (Alpine expects this format)
 cd "$APKOVL_DIR"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
@@ -430,9 +417,6 @@ fi
 # TODO: version apkovl
 echo "APKOVL created at: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
-echo "Deleting host from known ssh hosts..."
-ssh-keygen -f '/home/pi/.ssh/known_hosts' -R '192.168.1.101'
-
 unlink /srv/tftpboot/images/bootfs-current
 ln -sf $TFTPBOOT_DIR /srv/tftpboot/images/bootfs-current
 echo "Made version alpine-$ALPINE_VERSION-cursor the current bootfs"
@@ -440,6 +424,9 @@ echo ""
 echo "Setup complete!"
 echo "Files are in: $TFTPBOOT_DIR"
 echo "APKOVL file: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
+
+echo "Deleting host from known ssh hosts..."
+ssh-keygen -f '/home/pi/.ssh/known_hosts' -R '192.168.1.101'
 
 # TODO: detect or remove
 echo "Restarting POE port..."
