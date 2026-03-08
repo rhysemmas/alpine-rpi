@@ -66,12 +66,16 @@ curl -L -o kernel8.img "$ALPINE_NETBOOT_BASE/vmlinuz-rpi"
 curl -L -o initramfs-rpi "$ALPINE_NETBOOT_BASE/initramfs-rpi"
 curl -L -o bcm2711-rpi-4-b.dtb "$ALPINE_NETBOOT_BASE/dtbs-lts/broadcom/bcm2711-rpi-4-b.dtb"
 
-# Configure cmdline.txt for Alpine (cgroups needed for k3s when RPI_NAME is cp*)
+# Configure cmdline.txt for Alpine (cgroups + k3s kernel modules when RPI_NAME is cp* or wk*)
 CMDLINE_EXTRAS=""
-[[ "$RPI_NAME" == cp* ]] && CMDLINE_EXTRAS="cgroup_enable=memory cgroup_memory=1"
+MODULES_LIST="loop,squashfs"
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    CMDLINE_EXTRAS="cgroup_enable=memory cgroup_memory=1"
+    MODULES_LIST="loop,squashfs,overlay,nf_conntrack,br_netfilter"
+fi
 echo "Creating cmdline.txt..."
 cat > "$TFTPBOOT_DIR/cmdline.txt" <<EOF
-modules=loop,squashfs console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main modloop=https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot/modloop-rpi apkovl=http://192.168.1.2:8080/${RPI_NAME}.apkovl.tar.gz $CMDLINE_EXTRAS
+modules=${MODULES_LIST} console=ttyAMA0,115200 ip=dhcp alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main modloop=https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/netboot/modloop-rpi apkovl=http://192.168.1.2:8080/${RPI_NAME}.apkovl.tar.gz $CMDLINE_EXTRAS
 EOF
 
 echo "cmdline.txt created with content:"
@@ -197,6 +201,30 @@ echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
+# Kernel modules required by k3s (netfilter, bridge, overlay); load before k3s so sysctls exist
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    echo "Adding k3s kernel modules service..."
+    cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
+#!/sbin/openrc-run
+# Load overlay, nf_conntrack, br_netfilter so k3s can set net.bridge.* and net.netfilter.* sysctls.
+
+depend() {
+    need localmount
+    before net
+}
+
+start() {
+    ebegin "Loading k3s kernel modules"
+    for mod in overlay nf_conntrack br_netfilter iptable_nat iptable_filter; do
+        modprobe "$mod" 2>/dev/null || true
+    done
+    eend 0
+}
+MODEOF
+    chmod +x rootfs/etc/init.d/k3s-modules
+    ln -sf /etc/init.d/k3s-modules rootfs/etc/runlevels/boot/k3s-modules
+fi
+
 # Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default)
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     echo "Adding cgroups mount service for k3s..."
@@ -205,7 +233,7 @@ if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
 # Mount cgroup v1 at /sys/fs/cgroup so k3s can use it (required on Alpine diskless).
 
 depend() {
-    need localmount
+    need localmount k3s-modules
     before net
 }
 
@@ -224,6 +252,12 @@ start() {
         mountpoint -q /sys/fs/cgroup/"$subsys" 2>/dev/null || \
             mount -t cgroup -o "$subsys" cgroup /sys/fs/cgroup/"$subsys" 2>/dev/null || true
     done
+    # kubelet requires memory cgroup; fail if not mounted (log so it's visible after boot)
+    if ! mountpoint -q /sys/fs/cgroup/memory 2>/dev/null; then
+        echo "$(date -Iseconds) cgroups: memory cgroup not mounted - check cgroup_enable=memory in cmdline" >> /var/log/cgroups.log
+        eend 1 "memory cgroup not mounted - check cgroup_enable=memory in cmdline"
+        return 1
+    fi
     eend 0
 }
 CGEOF
