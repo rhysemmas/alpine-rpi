@@ -227,15 +227,7 @@ depend() {
 
 start() {
     ebegin "Loading k3s kernel modules"
-    # Diskless/netboot: initramfs may mount modloop at /.modloop but /lib/modules missing; link so modprobe finds modules
-    if [ ! -d /lib/modules/$(uname -r) ] && [ -d /.modloop ]; then
-        mkdir -p /lib/modules
-        ln -sf /.modloop /lib/modules/$(uname -r)
-    fi
-    # If still no /lib/modules, try modloop service (Alpine) to mount it
-    if [ ! -d /lib/modules ] && [ -x /etc/init.d/modloop ]; then
-        /etc/init.d/modloop start 2>/dev/null || true
-    fi
+    /etc/init.d/modloop start 2>/dev/null || true
     for mod in overlay nf_conntrack br_netfilter iptable_nat iptable_filter; do
         modprobe "$mod" 2>/dev/null || true
     done
