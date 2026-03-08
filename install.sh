@@ -70,6 +70,7 @@ curl -L -o bcm2711-rpi-4-b.dtb "$ALPINE_NETBOOT_BASE/dtbs-lts/broadcom/bcm2711-r
 CMDLINE_EXTRAS=""
 MODULES_LIST="loop,squashfs"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    # cgroup_enable=memory / cgroup_memory=1 for cgroup v1 if available; v2 is mounted by our cgroups service (no systemd)
     CMDLINE_EXTRAS="cgroup_enable=memory cgroup_memory=1"
     MODULES_LIST="loop,squashfs,overlay,nf_conntrack,br_netfilter"
 fi
@@ -225,12 +226,13 @@ MODEOF
     ln -sf /etc/init.d/k3s-modules rootfs/etc/runlevels/boot/k3s-modules
 fi
 
-# Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default)
+# Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default).
+# Try cgroup v2 first (unified); Alpine RPi kernel often has no CONFIG_MEMCG for v1 memory.
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     echo "Adding cgroups mount service for k3s..."
     cat > rootfs/etc/init.d/cgroups <<'CGEOF'
 #!/sbin/openrc-run
-# Mount cgroup v1 at /sys/fs/cgroup so k3s can use it (required on Alpine diskless).
+# Mount cgroup v2 (preferred) or v1 at /sys/fs/cgroup for k3s. kubelet needs memory controller.
 
 depend() {
     need localmount k3s-modules
@@ -239,23 +241,42 @@ depend() {
 
 start() {
     ebegin "Mounting cgroups at /sys/fs/cgroup"
-    if [ ! -d /sys/fs/cgroup ]; then
-        mkdir -p /sys/fs/cgroup
+    LOG="/var/log/cgroups.log"
+    [ -d /sys/fs/cgroup ] || mkdir -p /sys/fs/cgroup
+
+    # Already mounted (e.g. cgroup2 from initramfs)? Accept if memory is available.
+    if mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+        if [ -f /sys/fs/cgroup/cgroup.controllers ] && grep -q memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+            eend 0
+            return 0
+        fi
     fi
-    # Mount tmpfs as the cgroup root if not already mounted
+
+    # Try cgroup v2 first (unified hierarchy; memory often available when v1 memory is not)
     if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+        if mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null; then
+            if [ -f /sys/fs/cgroup/cgroup.controllers ] && grep -q memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
+                eend 0
+                return 0
+            fi
+            umount /sys/fs/cgroup 2>/dev/null || true
+        fi
+        # Fallback: tmpfs + cgroup v1 per-controller
         mount -t tmpfs -o mode=755 tmpfs /sys/fs/cgroup
     fi
-    # Mount each available cgroup v1 controller (skip if already mounted)
+
+    # Cgroup v1: mount each controller
     for subsys in cpuset cpu cpuacct blkio memory devices freezer net_cls net_prio perf_event hugetlb pids; do
         [ -d /sys/fs/cgroup/"$subsys" ] || mkdir -p /sys/fs/cgroup/"$subsys"
-        mountpoint -q /sys/fs/cgroup/"$subsys" 2>/dev/null || \
-            mount -t cgroup -o "$subsys" cgroup /sys/fs/cgroup/"$subsys" 2>/dev/null || true
+        if ! mountpoint -q /sys/fs/cgroup/"$subsys" 2>/dev/null; then
+            err=$(mount -t cgroup -o "$subsys" cgroup /sys/fs/cgroup/"$subsys" 2>&1) || true
+            [ -n "$err" ] && echo "$(date -Iseconds) cgroups: mount $subsys: $err" >> "$LOG"
+        fi
     done
-    # kubelet requires memory cgroup; fail if not mounted (log so it's visible after boot)
+
     if ! mountpoint -q /sys/fs/cgroup/memory 2>/dev/null; then
-        echo "$(date -Iseconds) cgroups: memory cgroup not mounted - check cgroup_enable=memory in cmdline" >> /var/log/cgroups.log
-        eend 1 "memory cgroup not mounted - check cgroup_enable=memory in cmdline"
+        echo "$(date -Iseconds) cgroups: memory cgroup not mounted (v1). Try cgroup v2 or kernel with CONFIG_MEMCG." >> "$LOG"
+        eend 1 "memory cgroup not mounted - see $LOG"
         return 1
     fi
     eend 0
