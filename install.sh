@@ -199,9 +199,7 @@ echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
-# modloop must run at boot so /lib/modules exists (modprobe, iptables need it). Enable for k3s nodes.
-[ -f rootfs/etc/init.d/modloop ] && ln -sf /etc/init.d/modloop rootfs/etc/runlevels/boot/modloop
-
+# modloop, k3s-modules, cgroups: created below and enabled via rc-update at the end (so OpenRC starts them at boot)
 # Kernel modules required by k3s (netfilter, bridge, overlay); load after modloop so /lib/modules exists
 echo "Adding k3s kernel modules service..."
 cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
@@ -222,7 +220,6 @@ start() {
 }
 MODEOF
 chmod +x rootfs/etc/init.d/k3s-modules
-ln -sf /etc/init.d/k3s-modules rootfs/etc/runlevels/boot/k3s-modules
 
 # Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default).
 # Try cgroup v2 first (unified); Alpine RPi kernel often has no CONFIG_MEMCG for v1 memory.
@@ -280,7 +277,6 @@ start() {
 }
 CGEOF
 chmod +x rootfs/etc/init.d/cgroups
-ln -sf /etc/init.d/cgroups rootfs/etc/runlevels/boot/cgroups
 
 # K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
 if [[ "$RPI_NAME" == cp* ]]; then
@@ -347,8 +343,19 @@ start_pre() {
 }
 K3SEOF
     chmod +x rootfs/etc/init.d/k3s-server
-    mkdir -p rootfs/etc/runlevels/default
-    ln -sf /etc/init.d/k3s-server rootfs/etc/runlevels/default/k3s-server
+fi
+
+# Register k3s-related services with OpenRC so they start at boot (rc-update creates runlevel symlinks)
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    echo "Enabling modloop, k3s-modules, cgroups (boot) and k3s-server (default) via rc-update..."
+    chroot rootfs /bin/sh -c "
+        rc-update add modloop boot 2>/dev/null || true
+        rc-update add k3s-modules boot
+        rc-update add cgroups boot
+    "
+fi
+if [[ "$RPI_NAME" == cp* ]]; then
+    chroot rootfs /bin/sh -c "rc-update add k3s-server default"
 fi
 
 # Configure SSH to allow root login with no password
