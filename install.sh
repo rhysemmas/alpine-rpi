@@ -218,7 +218,7 @@ if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     echo "Adding k3s kernel modules service..."
     cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
 #!/sbin/openrc-run
-# Load overlay, nf_conntrack, br_netfilter so k3s can set net.bridge.* and net.netfilter.* sysctls.
+# Ensure /lib/modules exists (modprobe needs it), then load overlay, nf_conntrack, br_netfilter, iptable_*.
 
 depend() {
     need localmount
@@ -227,6 +227,15 @@ depend() {
 
 start() {
     ebegin "Loading k3s kernel modules"
+    # Diskless/netboot: initramfs may mount modloop at /.modloop but /lib/modules missing; link so modprobe finds modules
+    if [ ! -d /lib/modules/$(uname -r) ] && [ -d /.modloop ]; then
+        mkdir -p /lib/modules
+        ln -sf /.modloop /lib/modules/$(uname -r)
+    fi
+    # If still no /lib/modules, try modloop service (Alpine) to mount it
+    if [ ! -d /lib/modules ] && [ -x /etc/init.d/modloop ]; then
+        /etc/init.d/modloop start 2>/dev/null || true
+    fi
     for mod in overlay nf_conntrack br_netfilter iptable_nat iptable_filter; do
         modprobe "$mod" 2>/dev/null || true
     done
