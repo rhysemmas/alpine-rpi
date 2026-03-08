@@ -148,7 +148,8 @@ trap cleanup EXIT
 echo "Installing packages in chroot and enabling them..."
 PKGS="alpine-base alpine-conf openssh chrony tzdata"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    PKGS="$PKGS curl iptables"
+    # iptables-legacy: default iptables uses nft backend which RPi kernel may not support
+    PKGS="$PKGS curl iptables iptables-legacy"
 fi
 chroot rootfs /bin/sh -c "
     apk update
@@ -157,6 +158,16 @@ chroot rootfs /bin/sh -c "
     rc-update add sshd default
     rc-update add chronyd default
 "
+
+# Prefer iptables-legacy in PATH so k3s uses it (nft backend fails with "Protocol not supported" on RPi)
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    echo "Linking iptables/ip6tables to legacy (nft not supported on RPi kernel)..."
+    chroot rootfs /bin/sh -c "
+        mkdir -p /usr/local/bin
+        ln -sf /usr/sbin/iptables-legacy /usr/local/bin/iptables
+        ln -sf /usr/sbin/ip6tables-legacy /usr/local/bin/ip6tables
+    "
+fi
 
 echo "Creating alpine boot script..."
 echo "===> Enabling interfaces"
@@ -297,6 +308,8 @@ if [[ "$RPI_NAME" == cp* ]]; then
 # Idempotent k3s server: try to join an existing cluster; if no peer responds, cluster-init.
 # Alpine FS is not persisted across reboots; this runs every boot from apkovl.
 # --snapshotter=native: overlay not available on diskless root; native needs no overlay/fuse.
+# Use iptables-legacy (RPi kernel does not support nft backend).
+export PATH="/usr/local/bin:$PATH"
 
 command="/usr/local/bin/k3s"
 command_background="yes"
