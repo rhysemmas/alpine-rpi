@@ -197,6 +197,40 @@ echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
+# Cgroups mount for k3s (Alpine diskless does not mount /sys/fs/cgroup by default)
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    echo "Adding cgroups mount service for k3s..."
+    cat > rootfs/etc/init.d/cgroups <<'CGEOF'
+#!/sbin/openrc-run
+# Mount cgroup v1 at /sys/fs/cgroup so k3s can use it (required on Alpine diskless).
+
+depend() {
+    need localmount
+    before net
+}
+
+start() {
+    ebegin "Mounting cgroups at /sys/fs/cgroup"
+    if [ ! -d /sys/fs/cgroup ]; then
+        mkdir -p /sys/fs/cgroup
+    fi
+    # Mount tmpfs as the cgroup root if not already mounted
+    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+        mount -t tmpfs -o mode=755 tmpfs /sys/fs/cgroup
+    fi
+    # Mount each available cgroup v1 controller (skip if already mounted)
+    for subsys in cpuset cpu cpuacct blkio memory devices freezer net_cls net_prio perf_event hugetlb pids; do
+        [ -d /sys/fs/cgroup/"$subsys" ] || mkdir -p /sys/fs/cgroup/"$subsys"
+        mountpoint -q /sys/fs/cgroup/"$subsys" 2>/dev/null || \
+            mount -t cgroup -o "$subsys" cgroup /sys/fs/cgroup/"$subsys" 2>/dev/null || true
+    done
+    eend 0
+}
+CGEOF
+    chmod +x rootfs/etc/init.d/cgroups
+    ln -sf /etc/init.d/cgroups rootfs/etc/runlevels/boot/cgroups
+fi
+
 # K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
 if [[ "$RPI_NAME" == cp* ]]; then
     echo "Configuring k3s control-plane (join-or-init) for $RPI_NAME..."
@@ -216,7 +250,7 @@ output_log="/var/log/k3s.log"
 error_log="/var/log/k3s.log"
 
 depend() {
-    need net
+    need net cgroups
     after setup-alpine
 }
 
