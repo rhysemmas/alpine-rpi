@@ -360,3 +360,9 @@ echo ""
 echo "Setup complete!"
 echo "Files are in: $TFTPBOOT_DIR"
 echo "APKOVL file: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
+
+# TODO: detect or remove
+echo "Restarting POE port..."
+snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 2
+sleep 3
+snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 1
