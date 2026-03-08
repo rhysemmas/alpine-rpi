@@ -142,10 +142,11 @@ trap cleanup EXIT
 # Install packages in chroot
 echo "Installing packages in chroot and enabling them..."
 PKGS="alpine-base alpine-conf openssh chrony tzdata"
-if [[ "$RPI_NAME" == cp* ]]; then
-    PKGS="$PKGS curl iptables"
+if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
+    PKGS="$PKGS curl iptables fuse-overlayfs"
 fi
 chroot rootfs /bin/sh -c "
+    [ -f /etc/apk/repositories ] && grep -q '^[^#].*community' /etc/apk/repositories || echo 'https://dl-cdn.alpinelinux.org/alpine/v'${ALPINE_VERSION}'/community' >> /etc/apk/repositories
     apk update
     apk add --no-cache $PKGS
     rc-update add networking boot
@@ -279,10 +280,10 @@ start_pre() {
 
     if [ -n "$JOIN_SERVER" ]; then
         einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
-        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN}"
+        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=fuse-overlayfs"
     else
         einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
-        command_args="server --cluster-init --token ${TOKEN}"
+        command_args="server --cluster-init --token ${TOKEN} --snapshotter=fuse-overlayfs"
     fi
     return 0
 }
