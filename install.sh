@@ -143,10 +143,9 @@ trap cleanup EXIT
 echo "Installing packages in chroot and enabling them..."
 PKGS="alpine-base alpine-conf openssh chrony tzdata"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    PKGS="$PKGS curl iptables fuse-overlayfs"
+    PKGS="$PKGS curl iptables"
 fi
 chroot rootfs /bin/sh -c "
-    [ -f /etc/apk/repositories ] && grep -q '^[^#].*community' /etc/apk/repositories || echo 'https://dl-cdn.alpinelinux.org/alpine/v'${ALPINE_VERSION}'/community' >> /etc/apk/repositories
     apk update
     apk add --no-cache $PKGS
     rc-update add networking boot
@@ -242,6 +241,7 @@ if [[ "$RPI_NAME" == cp* ]]; then
 #!/sbin/openrc-run
 # Idempotent k3s server: try to join an existing cluster; if no peer responds, cluster-init.
 # Alpine FS is not persisted across reboots; this runs every boot from apkovl.
+# --snapshotter=native: overlay not available on diskless root; native needs no overlay/fuse.
 
 command="/usr/local/bin/k3s"
 command_background="yes"
@@ -280,10 +280,10 @@ start_pre() {
 
     if [ -n "$JOIN_SERVER" ]; then
         einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
-        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=fuse-overlayfs"
+        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=native"
     else
         einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
-        command_args="server --cluster-init --token ${TOKEN} --snapshotter=fuse-overlayfs"
+        command_args="server --cluster-init --token ${TOKEN} --snapshotter=native"
     fi
     return 0
 }
