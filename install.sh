@@ -299,7 +299,7 @@ start() {
         return 0
     fi
     # NFS: spec is server:path (e.g. 192.168.1.2:/export/k3s/cp1)
-    if mount -t nfs -o rw,soft,timeo=30,retrans=3 "$spec" /var/lib/rancher 2>/dev/null; then
+    if mount -t nfs -o nolock,rw,soft,timeo=30,retrans=3 "$spec" /var/lib/rancher 2>/dev/null; then
         eend 0
     else
         eend 1 "mount $spec /var/lib/rancher failed"
