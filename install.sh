@@ -10,8 +10,8 @@ set -euo pipefail
 # TODO: host alpine repo and modloop on local http server
 
 # Initialize rpi hostname TODO: make it a command line argument
-RPI_NAME='${RPI_NAME:-cp1}'
-POE_PORT='${POE_PORT:-23}'
+RPI_NAME="${RPI_NAME:-cp1}"
+POE_PORT="${POE_PORT:-23}"
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
 # All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
