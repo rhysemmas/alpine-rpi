@@ -197,10 +197,32 @@ start() {
 EOF
 chmod +x rootfs/etc/init.d/setup-alpine
 
-# Enable the service in the boot runlevel so it runs automatically
-echo "Enabling hostname service in boot runlevel..."
-mkdir -p rootfs/etc/runlevels/boot
-ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
+# Wrap modloop so it waits for chronyd to sync the clock before running (SSL cert verification needs sane time)
+echo "Wrapping modloop to wait for time sync (chronyc waitsync) before starting..."
+cat > rootfs/etc/init.d/modloop-wrapper <<'MODLOOPWRAP'
+#!/sbin/openrc-run
+# Wrapper: wait for chronyd to sync clock (fixes SSL cert verify after clock skew), then run real modloop.
+
+depend() {
+    need chronyd
+    before k3s-modules
+}
+
+start_pre() {
+    ebegin "Waiting for time sync (chronyd)"
+    chronyc waitsync 2>/dev/null || { sleep 60; true; }
+    eend 0
+}
+
+start() {
+    /etc/init.d/modloop start
+}
+
+stop() {
+    /etc/init.d/modloop stop
+}
+MODLOOPWRAP
+chmod +x rootfs/etc/init.d/modloop-wrapper
 
 echo "Adding k3s kernel modules service..."
 cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
@@ -209,7 +231,7 @@ cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
 
 depend() {
     need localmount modloop-wrapper
-    before net
+    before cgroups
 }
 
 start() {
@@ -231,7 +253,7 @@ cat > rootfs/etc/init.d/cgroups <<'CGEOF'
 
 depend() {
     need localmount k3s-modules
-    before net
+    before k3s-server
 }
 
 start() {
@@ -344,7 +366,6 @@ error_log="/var/log/k3s.log"
 
 depend() {
     need net cgroups k3s-data-mount
-    after setup-alpine
 }
 
 start_pre() {
@@ -406,32 +427,10 @@ start_pre() {
 K3SEOF
 chmod +x rootfs/etc/init.d/k3s-server
 
-# Wrap modloop so it waits for chronyd to sync the clock before running (SSL cert verification needs sane time)
-echo "Wrapping modloop to wait for time sync (chronyc waitsync) before starting..."
-cat > rootfs/etc/init.d/modloop-wrapper <<'MODLOOPWRAP'
-#!/sbin/openrc-run
-# Wrapper: wait for chronyd to sync clock (fixes SSL cert verify after clock skew), then run real modloop.
-
-depend() {
-    need chronyd
-    before k3s-modules
-}
-
-start_pre() {
-    ebegin "Waiting for time sync (chronyd)"
-    chronyc waitsync 2>/dev/null || { sleep 60; true; }
-    eend 0
-}
-
-start() {
-    /etc/init.d/modloop start
-}
-
-stop() {
-    /etc/init.d/modloop stop
-}
-MODLOOPWRAP
-chmod +x rootfs/etc/init.d/modloop-wrapper
+# Enable the hostname service in the boot runlevel so it runs automatically
+echo "Enabling hostname service in boot runlevel..."
+mkdir -p rootfs/etc/runlevels/boot
+ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
 # Register k3s-related services with OpenRC. chronyd first so time is synced before modloop (SSL).
 # Put modloop/k3s-modules/cgroups in *default* so they run after networking is up.
