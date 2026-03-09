@@ -11,6 +11,8 @@ set -euo pipefail
 
 # Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='${RPI_NAME:-cp1}'
+POE_PORT='${POE_PORT:-24}'
+IP_ADDRESS='${IP_ADDRESS:-192.168.1.101}'
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
 # All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
@@ -392,8 +394,16 @@ start_pre() {
         einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
         command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=native"
     else
-        einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
-        command_args="server --cluster-init --token ${TOKEN} --snapshotter=native"
+        case "$MYSELF" in
+            cp*)
+                einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
+                command_args="server --cluster-init --token ${TOKEN} --snapshotter=native"
+                ;;
+            *)
+                eend 1 "No peer reachable and hostname does not start with cp; refusing to cluster-init"
+                return 1
+                ;;
+        esac
     fi
     return 0
 }
@@ -518,6 +528,6 @@ chown pi:pi /home/pi/.ssh/known_hosts
 
 # TODO: detect or remove
 echo "Restarting POE port..."
-snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 2
+snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.${POE_PORT} i 2
 sleep 3
-snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.23 i 1
+snmpset -v 2c -c private 192.168.1.254 1.3.6.1.2.1.105.1.1.1.3.1.${POE_PORT} i 1
