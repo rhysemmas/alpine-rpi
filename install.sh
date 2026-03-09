@@ -198,10 +198,11 @@ EOF
 chmod +x rootfs/etc/init.d/setup-alpine
 
 # Wrap modloop so it waits for chronyd to sync the clock before running (SSL cert verification needs sane time)
-echo "Wrapping modloop to wait for time sync (chronyc waitsync) before starting..."
+echo "Wrapping modloop to wait for time sync (chronyd) before starting..."
 cat > rootfs/etc/init.d/modloop-wrapper <<'MODLOOPWRAP'
 #!/sbin/openrc-run
 # Wrapper: wait for chronyd to sync clock (fixes SSL cert verify after clock skew), then run real modloop.
+# Force step first so large RTC skew is corrected immediately; then wait for sync; log state for verification.
 
 depend() {
     need chronyd
@@ -210,7 +211,16 @@ depend() {
 
 start_pre() {
     ebegin "Waiting for time sync (chronyd)"
-    chronyc waitsync 2>/dev/null || { sleep 60; true; }
+    mkdir -p /var/log
+    # Force immediate step if offset is large (don't wait for slow slew)
+    chronyc makestep 2>/dev/null || true
+    # Wait up to 12 tries * 10s = 120s for sync, require remaining correction < 0.01s
+    if ! chronyc waitsync 12 0.01 2>/dev/null; then
+        chronyc makestep 2>/dev/null || true
+        echo "modloop-wrapper: chronyd waitsync failed or timed out" >> /var/log/chrony-sync.log 2>/dev/null || true
+    fi
+    # Log sync state so you can verify: chronyc tracking, chronyc sources
+    { echo "--- $(date -Iseconds) ---"; chronyc tracking 2>/dev/null; chronyc sources 2>/dev/null; } >> /var/log/chrony-sync.log 2>/dev/null || true
     eend 0
 }
 
