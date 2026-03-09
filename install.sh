@@ -338,16 +338,41 @@ K3SEOF
     chmod +x rootfs/etc/init.d/k3s-server
 fi
 
-# Register k3s-related services with OpenRC. Put modloop/k3s-modules/cgroups in *default* (not boot)
-# so they start after networking is up; modloop fetches/verifies from CDN and needs network/SSL.
-echo "Enabling modloop, k3s-modules, cgroups, k3s-server (default runlevel) via rc-update..."
+# Wrap modloop so it waits for chronyd to sync the clock before running (SSL cert verification needs sane time)
+echo "Wrapping modloop to wait for time sync (chronyc waitsync) before starting..."
+mv rootfs/etc/init.d/modloop rootfs/etc/init.d/modloop.real
+cat > rootfs/etc/init.d/modloop <<'MODLOOPWRAP'
+#!/sbin/openrc-run
+# Wrapper: wait for chronyd to sync clock (fixes SSL cert verify after clock skew), then run real modloop.
+
+depend() {
+    need chronyd
+    before k3s-modules
+}
+
+start_pre() {
+    ebegin "Waiting for time sync (chronyd)"
+    chronyc waitsync 2>/dev/null || { sleep 60; true; }
+    eend 0
+}
+
+start() {
+    /etc/init.d/modloop.real start
+}
+
+stop() {
+    /etc/init.d/modloop.real stop
+}
+MODLOOPWRAP
+chmod +x rootfs/etc/init.d/modloop
+
+# Register k3s-related services with OpenRC. chronyd first so time is synced before modloop (SSL).
+# Put modloop/k3s-modules/cgroups in *default* so they run after networking is up.
+echo "Enabling services via rc-update..."
 chroot rootfs /bin/sh -c "
-    apk update
-    apk add --no-cache $PKGS
     rc-update add networking boot
     rc-update add sshd default
     rc-update add chronyd default
-    rc-update add modloop default
     rc-update add k3s-modules default
     rc-update add cgroups default
     rc-update add k3s-server default
