@@ -24,6 +24,8 @@ else
 fi
 # Hostnames must resolve at boot (e.g. via DHCP/dnsmasq as in dhcp-hosts.example).
 K3S_CP_NODES="${K3S_CP_NODES:-cp1}"   # Space-separated: all control-plane hostnames (e.g. "cp1 cp2 cp3")
+# Optional: NFS (or other) mount for /var/lib/rancher to avoid filling in-memory root (etcd, containerd, kubelet).
+K3S_DATA_MOUNT="${K3S_DATA_MOUNT:-192.168.1.2:/srv/nfs/state/${RPI_NAME}/}"
 
 # Get latest Alpine major release version
 echo "Getting latest Alpine version..."
@@ -146,6 +148,7 @@ PKGS="alpine-base alpine-conf openssh chrony tzdata"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     # iptables-legacy: default iptables uses nft backend which RPi kernel may not support
     PKGS="$PKGS curl iptables iptables-legacy"
+    [[ -n "$K3S_DATA_MOUNT" ]] && PKGS="$PKGS nfs-utils"
 fi
 chroot rootfs /bin/sh -c "
     apk update
@@ -274,13 +277,57 @@ start() {
 CGEOF
 chmod +x rootfs/etc/init.d/cgroups
 
-# K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
-if [[ "$RPI_NAME" == cp* ]]; then
-    echo "Configuring k3s control-plane (join-or-init) for $RPI_NAME..."
+# Optional: mount remote storage at /var/lib/rancher so etcd/containerd/kubelet don't fill in-memory root
+echo "Adding k3s-data-mount service..."
+cat > rootfs/etc/init.d/k3s-data-mount <<'DATAMOUNT'
+#!/sbin/openrc-run
+# Mount NFS (or other) at /var/lib/rancher when /etc/k3s/data-mount is set (e.g. server:/export/k3s/cp1).
+
+depend() {
+    need net
+    before k3s-server
+}
+
+start() {
+    spec=$(cat /etc/k3s/data-mount 2>/dev/null | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -z "$spec" ] && return 0
+    ebegin "Mounting k3s data at /var/lib/rancher"
+    mkdir -p /var/lib/rancher
+    if mountpoint -q /var/lib/rancher 2>/dev/null; then
+        eend 0
+        return 0
+    fi
+    # NFS: spec is server:path (e.g. 192.168.1.2:/export/k3s/cp1)
+    if mount -t nfs -o rw,soft,timeo=30,retrans=3 "$spec" /var/lib/rancher 2>/dev/null; then
+        eend 0
+    else
+        eend 1 "mount $spec /var/lib/rancher failed"
+        return 1
+    fi
+}
+
+stop() {
+    mountpoint -q /var/lib/rancher 2>/dev/null || return 0
+    ebegin "Unmounting /var/lib/rancher"
+    umount /var/lib/rancher 2>/dev/null
+    eend $?
+}
+DATAMOUNT
+chmod +x rootfs/etc/init.d/k3s-data-mount
+# Bake K3S_DATA_MOUNT into apkovl so the Pi has /etc/k3s/data-mount at boot (rootfs/etc is copied to apkovl later)
+if [[ -n "$K3S_DATA_MOUNT" ]]; then
     mkdir -p rootfs/etc/k3s
-    echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
-    echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
-    cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
+    echo "$K3S_DATA_MOUNT" > rootfs/etc/k3s/data-mount
+    echo "K3S_DATA_MOUNT=$K3S_DATA_MOUNT -> /etc/k3s/data-mount (mount at /var/lib/rancher)"
+fi
+
+# TODO: this script should handle both cp and wk nodes
+# K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
+echo "Configuring k3s control-plane (join-or-init) for $RPI_NAME..."
+mkdir -p rootfs/etc/k3s
+echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
+echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
+cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
 #!/sbin/openrc-run
 # Idempotent k3s server: try to join an existing cluster; if no peer responds, cluster-init.
 # Alpine FS is not persisted across reboots; this runs every boot from apkovl.
@@ -296,7 +343,7 @@ output_log="/var/log/k3s.log"
 error_log="/var/log/k3s.log"
 
 depend() {
-    need net cgroups
+    need net cgroups k3s-data-mount
     after setup-alpine
 }
 
@@ -342,8 +389,7 @@ start_pre() {
     return 0
 }
 K3SEOF
-    chmod +x rootfs/etc/init.d/k3s-server
-fi
+chmod +x rootfs/etc/init.d/k3s-server
 
 # Wrap modloop so it waits for chronyd to sync the clock before running (SSL cert verification needs sane time)
 echo "Wrapping modloop to wait for time sync (chronyc waitsync) before starting..."
@@ -382,6 +428,7 @@ chroot rootfs /bin/sh -c "
     rc-update add modloop-wrapper default
     rc-update add k3s-modules default
     rc-update add cgroups default
+    rc-update add k3s-data-mount default
     rc-update add k3s-server default
 "
 
