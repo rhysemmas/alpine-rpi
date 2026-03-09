@@ -345,15 +345,14 @@ if [[ -n "$K3S_DATA_MOUNT" ]]; then
     echo "K3S_DATA_MOUNT=$K3S_DATA_MOUNT -> /etc/k3s/data-mount (mount at /var/lib/rancher)"
 fi
 
-# TODO: this script should handle both cp and wk nodes
-# K3s control-plane: prefer existing on-disk state (e.g. NFS); else join peer or cluster-init from apkovl token
-echo "Configuring k3s control-plane for $RPI_NAME..."
+# K3s: cp* = server (join peer or cluster-init); wk* = agent (join control plane from k3s-cp-nodes).
+echo "Configuring k3s for $RPI_NAME (control-plane or worker)..."
 mkdir -p rootfs/etc/k3s
 echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
 echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
 cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
 #!/sbin/openrc-run
-# k3s server: if /var/lib/rancher has existing cluster state (e.g. NFS), start and use it; else join peer or cluster-init from apkovl token.
+# k3s: cp* runs server (reuse on-disk state, join peer, or cluster-init); wk* runs agent (join control plane from k3s-cp-nodes).
 # --snapshotter=native: overlay not available on diskless root.
 export PATH="/usr/local/bin:$PATH"
 
@@ -387,16 +386,21 @@ start_pre() {
 
     TOKEN=$(cat /etc/k3s/k3s-token 2>/dev/null)
     [ -z "$TOKEN" ] && { eend 1 "Missing /etc/k3s/k3s-token"; return 1; }
+    MYSELF=$(cat /etc/hostname)
 
-    # If cluster state already exists on disk (e.g. NFS at /var/lib/rancher), start and use it; no join/init
+    # If control-plane state already exists on disk (e.g. NFS), start server and use it; no join/init
     if [ -d /var/lib/rancher/k3s/server/db ] && [ -n "$(ls -A /var/lib/rancher/k3s/server/db 2>/dev/null)" ]; then
-        einfo "Existing cluster state on disk; starting k3s server (reconnect to etcd)"
-        command_args="server --token ${TOKEN} --snapshotter=native"
-        return 0
+        case "$MYSELF" in
+            cp*)
+                einfo "Existing cluster state on disk; starting k3s server (reconnect to etcd)"
+                command_args="server --token ${TOKEN} --snapshotter=native"
+                return 0
+                ;;
+            *) ;;
+        esac
     fi
 
-    # No on-disk state: try to join a peer or cluster-init (token from apkovl)
-    MYSELF=$(cat /etc/hostname)
+    # Discover control plane by trying each k3s-cp-nodes hostname (relies on DNS / etc/hosts).
     JOIN_SERVER=""
     for peer in $(cat /etc/k3s/k3s-cp-nodes 2>/dev/null); do
         [ "$peer" = "$MYSELF" ] && continue
@@ -407,21 +411,30 @@ start_pre() {
         fi
     done
 
-    if [ -n "$JOIN_SERVER" ]; then
-        einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
-        command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=native"
-    else
-        case "$MYSELF" in
-            cp*)
+    case "$MYSELF" in
+        cp*)
+            if [ -n "$JOIN_SERVER" ]; then
+                einfo "Joining existing k3s cluster via ${JOIN_SERVER}:6443"
+                command_args="server --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=native"
+            else
                 einfo "No peer reachable; initializing new k3s cluster (cluster-init)"
                 command_args="server --cluster-init --token ${TOKEN} --snapshotter=native"
-                ;;
-            *)
-                eend 1 "No peer reachable and hostname does not start with cp; refusing to cluster-init"
+            fi
+            ;;
+        wk*)
+            if [ -n "$JOIN_SERVER" ]; then
+                einfo "Worker joining control plane at ${JOIN_SERVER}:6443"
+                command_args="agent --server https://${JOIN_SERVER}:6443 --token ${TOKEN} --snapshotter=native"
+            else
+                eend 1 "Worker needs control plane; none of k3s-cp-nodes responded on :6443 (check DNS/hosts)"
                 return 1
-                ;;
-        esac
-    fi
+            fi
+            ;;
+        *)
+            eend 1 "Hostname must start with cp (control plane) or wk (worker)"
+            return 1
+            ;;
+    esac
     return 0
 }
 K3SEOF
