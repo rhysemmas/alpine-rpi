@@ -368,6 +368,14 @@ EOF
 echo "Setting up passwordless root login..."
 chroot rootfs /bin/sh -c "passwd -d root" || true
 
+# OpenRC boot logging: write startup output to /var/log/rc.log for debugging (e.g. why modloop/k3s-modules didn't start)
+echo "Enabling OpenRC boot logging (rc_logger)..."
+mkdir -p rootfs/etc
+touch rootfs/etc/rc.conf
+if ! grep -q 'rc_logger' rootfs/etc/rc.conf 2>/dev/null; then
+    echo 'rc_logger="YES"' >> rootfs/etc/rc.conf
+fi
+
 # Configure for diskless operation - no fstab entries
 echo "Configuring for diskless operation..."
 # Remove any fstab entries that might have been created
