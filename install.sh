@@ -147,13 +147,6 @@ if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     # iptables-legacy: default iptables uses nft backend which RPi kernel may not support
     PKGS="$PKGS curl iptables iptables-legacy"
 fi
-chroot rootfs /bin/sh -c "
-    apk update
-    apk add --no-cache $PKGS
-    rc-update add networking boot
-    rc-update add sshd default
-    rc-update add chronyd default
-"
 
 echo "Creating alpine boot script..."
 echo "===> Enabling interfaces"
@@ -349,7 +342,12 @@ fi
 # so they start after networking is up; modloop fetches/verifies from CDN and needs network/SSL.
 echo "Enabling modloop, k3s-modules, cgroups, k3s-server (default runlevel) via rc-update..."
 chroot rootfs /bin/sh -c "
-    rc-update add modloop default 2>/dev/null || true
+    apk update
+    apk add --no-cache $PKGS
+    rc-update add networking boot
+    rc-update add sshd default
+    rc-update add chronyd default
+    rc-update add modloop default
     rc-update add k3s-modules default
     rc-update add cgroups default
     rc-update add k3s-server default
