@@ -346,17 +346,13 @@ K3SEOF
 fi
 
 # Register k3s-related services with OpenRC so they start at boot (rc-update creates runlevel symlinks)
-if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
-    echo "Enabling modloop, k3s-modules, cgroups (boot) and k3s-server (default) via rc-update..."
-    chroot rootfs /bin/sh -c "
-        rc-update add modloop boot 2>/dev/null || true
-        rc-update add k3s-modules boot
-        rc-update add cgroups boot
-    "
-fi
-if [[ "$RPI_NAME" == cp* ]]; then
-    chroot rootfs /bin/sh -c "rc-update add k3s-server default"
-fi
+echo "Enabling modloop, k3s-modules, cgroups (boot) and k3s-server (default) via rc-update..."
+chroot rootfs /bin/sh -c "
+    rc-update add modloop boot 2>/dev/null || true
+    rc-update add k3s-modules boot
+    rc-update add cgroups boot
+    rc-update add k3s-server default
+"
 
 # Configure SSH to allow root login with no password
 echo "Configuring SSH..."
