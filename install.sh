@@ -12,7 +12,6 @@ set -euo pipefail
 # Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='${RPI_NAME:-cp1}'
 POE_PORT='${POE_PORT:-23}'
-IP_ADDRESS='${IP_ADDRESS:-192.168.1.101}'
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
 # All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
@@ -521,10 +520,6 @@ echo ""
 echo "Setup complete!"
 echo "Files are in: $TFTPBOOT_DIR"
 echo "APKOVL file: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
-
-echo "Deleting host from known ssh hosts..."
-ssh-keygen -f '/home/pi/.ssh/known_hosts' -R '192.168.1.101'
-chown pi:pi /home/pi/.ssh/known_hosts
 
 # TODO: detect or remove
 echo "Restarting POE port..."
