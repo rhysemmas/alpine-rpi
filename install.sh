@@ -1,13 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# TODO: alpine slow to boot? ssh not available for some time
+# TODO: image pulling very slow on nfs mount - cache images on nas?
+
 # TODO: cache artifacts downloaded from alpine/github
 # TODO: remove ssh hostkey from nas for installed pi
 # TODO: how to do rolling upgrades?
 # TODO: host alpine repo and modloop on local http server
 
 # Initialize rpi hostname TODO: make it a command line argument
-RPI_NAME='cp1'
+RPI_NAME='${RPI_NAME:-cp1}'
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
 # All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
@@ -323,17 +326,15 @@ if [[ -n "$K3S_DATA_MOUNT" ]]; then
 fi
 
 # TODO: this script should handle both cp and wk nodes
-# K3s control-plane: idempotent join-or-init (no persistent FS; re-join existing cluster on reboot)
-echo "Configuring k3s control-plane (join-or-init) for $RPI_NAME..."
+# K3s control-plane: prefer existing on-disk state (e.g. NFS); else join peer or cluster-init from apkovl token
+echo "Configuring k3s control-plane for $RPI_NAME..."
 mkdir -p rootfs/etc/k3s
 echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
 echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
 cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
 #!/sbin/openrc-run
-# Idempotent k3s server: try to join an existing cluster; if no peer responds, cluster-init.
-# Alpine FS is not persisted across reboots; this runs every boot from apkovl.
-# --snapshotter=native: overlay not available on diskless root; native needs no overlay/fuse.
-# Use iptables-legacy (RPi kernel does not support nft backend).
+# k3s server: if /var/lib/rancher has existing cluster state (e.g. NFS), start and use it; else join peer or cluster-init from apkovl token.
+# --snapshotter=native: overlay not available on diskless root.
 export PATH="/usr/local/bin:$PATH"
 
 command="/usr/local/bin/k3s"
@@ -368,12 +369,19 @@ start_pre() {
     TOKEN=$(cat /etc/k3s/k3s-token 2>/dev/null)
     [ -z "$TOKEN" ] && { eend 1 "Missing /etc/k3s/k3s-token"; return 1; }
 
+    # If cluster state already exists on disk (e.g. NFS at /var/lib/rancher), start and use it; no join/init
+    if [ -d /var/lib/rancher/k3s/server/db ] && [ -n "$(ls -A /var/lib/rancher/k3s/server/db 2>/dev/null)" ]; then
+        einfo "Existing cluster state on disk; starting k3s server (reconnect to etcd)"
+        command_args="server --token ${TOKEN} --snapshotter=native"
+        return 0
+    fi
+
+    # No on-disk state: try to join a peer or cluster-init (token from apkovl)
     MYSELF=$(cat /etc/hostname)
     JOIN_SERVER=""
     for peer in $(cat /etc/k3s/k3s-cp-nodes 2>/dev/null); do
         [ "$peer" = "$MYSELF" ] && continue
         code=$(curl -k -s -o /dev/null --connect-timeout 3 -w "%{http_code}" "https://${peer}:6443" 2>/dev/null || true)
-        # 401/403 = API up (unauthorized); 200 = OK
         if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -ge 200 ] 2>/dev/null; then
             JOIN_SERVER="$peer"
             break
