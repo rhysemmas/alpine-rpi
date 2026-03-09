@@ -372,9 +372,7 @@ chroot rootfs /bin/sh -c "passwd -d root" || true
 echo "Enabling OpenRC boot logging (rc_logger)..."
 mkdir -p rootfs/etc
 touch rootfs/etc/rc.conf
-if ! grep -q 'rc_logger' rootfs/etc/rc.conf 2>/dev/null; then
-    echo 'rc_logger="YES"' >> rootfs/etc/rc.conf
-fi
+echo 'rc_logger="YES"' >> rootfs/etc/rc.conf
 
 # Configure for diskless operation - no fstab entries
 echo "Configuring for diskless operation..."
