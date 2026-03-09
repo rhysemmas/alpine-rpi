@@ -301,10 +301,14 @@ depend() {
 }
 
 start_pre() {
-    # Use iptables-legacy at boot (apkovl only overlays /etc; create symlinks so k3s finds them via PATH)
+    # Use iptables-legacy at boot (apkovl only overlays /etc; create symlinks so k3s/flannel find them via PATH)
     mkdir -p /usr/local/bin
     ln -sf /usr/sbin/iptables-legacy /usr/local/bin/iptables
     ln -sf /usr/sbin/ip6tables-legacy /usr/local/bin/ip6tables
+    ln -sf /usr/sbin/iptables-legacy-restore /usr/local/bin/iptables-restore
+    ln -sf /usr/sbin/iptables-legacy-save /usr/local/bin/iptables-save
+    ln -sf /usr/sbin/ip6tables-legacy-restore /usr/local/bin/ip6tables-restore
+    ln -sf /usr/sbin/ip6tables-legacy-save /usr/local/bin/ip6tables-save
 
     # Install k3s binary if missing (diskless: no persistence, so reinstall each boot)
     if [ ! -x /usr/local/bin/k3s ]; then
