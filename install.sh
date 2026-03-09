@@ -147,6 +147,11 @@ if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     # iptables-legacy: default iptables uses nft backend which RPi kernel may not support
     PKGS="$PKGS curl iptables iptables-legacy"
 fi
+chroot rootfs /bin/sh -c "
+    apk update
+    apk add --no-cache $PKGS
+"
+
 
 echo "Creating alpine boot script..."
 echo "===> Enabling interfaces"
