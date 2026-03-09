@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Initialize rpi hostname TODO: make it a command line argument
 RPI_NAME='${RPI_NAME:-cp1}'
-POE_PORT='${POE_PORT:-24}'
+POE_PORT='${POE_PORT:-23}'
 IP_ADDRESS='${IP_ADDRESS:-192.168.1.101}'
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
