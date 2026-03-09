@@ -1,17 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# TODO: alpine slow to boot? ssh not available for some time
-# TODO: image pulling very slow on nfs mount - cache images on nas?
+# Usage: sudo ./install.sh [RPI_NAME] [POE_PORT]
+#   RPI_NAME  hostname for this Pi (default: cp1). Pass as $1 so it works under sudo.
+#   POE_PORT  POE switch port number (default: 23).
+# Or: RPI_NAME=cp2 POE_PORT=23 sudo -E ./install.sh  (sudo -E preserves env)
 
-# TODO: cache artifacts downloaded from alpine/github
-# TODO: remove ssh hostkey from nas for installed pi
-# TODO: how to do rolling upgrades?
-# TODO: host alpine repo and modloop on local http server
-
-# Initialize rpi hostname TODO: make it a command line argument
-RPI_NAME="${RPI_NAME:-cp1}"
-POE_PORT="${POE_PORT:-23}"
+# Initialize rpi hostname and POE port (positional args work with sudo; env vars need sudo -E)
+RPI_NAME="${1:-${RPI_NAME:-cp1}}"
+POE_PORT="${2:-${POE_PORT:-23}}"
 
 # K3s control-plane: when RPI_NAME begins with "cp", install k3s as server and join-or-init idempotently.
 # All cp nodes must use the same token; peer list is used to discover an existing cluster on boot (no local persistence).
