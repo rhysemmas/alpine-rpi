@@ -148,7 +148,8 @@ PKGS="alpine-base alpine-conf openssh chrony tzdata"
 if [[ "$RPI_NAME" == cp* || "$RPI_NAME" == wk* ]]; then
     # iptables-legacy: default iptables uses nft backend which RPi kernel may not support
     PKGS="$PKGS curl iptables iptables-legacy"
-    [[ -n "$K3S_DATA_MOUNT" ]] && PKGS="$PKGS nfs-utils"
+    # nfs-utils + flock (util-linux): BusyBox flock doesn't support -e, which mount.nfs uses
+    [[ -n "$K3S_DATA_MOUNT" ]] && PKGS="$PKGS nfs-utils flock"
 fi
 chroot rootfs /bin/sh -c "
     apk update
