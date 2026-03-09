@@ -427,6 +427,7 @@ echo "APKOVL file: $HTTP_APKOVL_DIR/${RPI_NAME}.apkovl.tar.gz"
 
 echo "Deleting host from known ssh hosts..."
 ssh-keygen -f '/home/pi/.ssh/known_hosts' -R '192.168.1.101'
+chown pi:pi ~/.ssh/known_hosts
 
 # TODO: detect or remove
 echo "Restarting POE port..."
