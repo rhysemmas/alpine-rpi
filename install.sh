@@ -199,7 +199,7 @@ echo "Enabling hostname service in boot runlevel..."
 mkdir -p rootfs/etc/runlevels/boot
 ln -sf /etc/init.d/setup-alpine rootfs/etc/runlevels/boot/setup-alpine
 
-# modloop, k3s-modules, cgroups: created below and enabled via rc-update at the end (so OpenRC starts them at boot)
+# modloop, k3s-modules, cgroups: enabled in *default* runlevel (so they run after networking; modloop needs network/SSL for CDN)
 # Kernel modules required by k3s (netfilter, bridge, overlay); load after modloop so /lib/modules exists
 echo "Adding k3s kernel modules service..."
 cat > rootfs/etc/init.d/k3s-modules <<'MODEOF'
@@ -345,12 +345,13 @@ K3SEOF
     chmod +x rootfs/etc/init.d/k3s-server
 fi
 
-# Register k3s-related services with OpenRC so they start at boot (rc-update creates runlevel symlinks)
-echo "Enabling modloop, k3s-modules, cgroups (boot) and k3s-server (default) via rc-update..."
+# Register k3s-related services with OpenRC. Put modloop/k3s-modules/cgroups in *default* (not boot)
+# so they start after networking is up; modloop fetches/verifies from CDN and needs network/SSL.
+echo "Enabling modloop, k3s-modules, cgroups, k3s-server (default runlevel) via rc-update..."
 chroot rootfs /bin/sh -c "
-    rc-update add modloop boot 2>/dev/null || true
-    rc-update add k3s-modules boot
-    rc-update add cgroups boot
+    rc-update add modloop default 2>/dev/null || true
+    rc-update add k3s-modules default
+    rc-update add cgroups default
     rc-update add k3s-server default
 "
 
