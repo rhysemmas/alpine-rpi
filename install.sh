@@ -360,6 +360,13 @@ echo "Configuring k3s for $RPI_NAME (control-plane or worker)..."
 mkdir -p rootfs/etc/k3s
 echo "$K3S_TOKEN" > rootfs/etc/k3s/k3s-token
 echo "$K3S_CP_NODES" | tr ' ' '\n' | awk 'NF' > rootfs/etc/k3s/k3s-cp-nodes
+# Workers: bake a deterministic node password into apkovl so reboot reuses same credentials (no duplicate nodes, no NFS).
+if [[ "$RPI_NAME" == wk* ]]; then
+    NODE_PASSWORD=$(echo -n "${RPI_NAME}:${K3S_TOKEN}" | openssl dgst -sha256 | awk '{print $2}')
+    mkdir -p rootfs/etc/rancher/node
+    echo -n "$NODE_PASSWORD" > rootfs/etc/rancher/node/password
+    echo "Baked deterministic node password for $RPI_NAME into /etc/rancher/node/password"
+fi
 cat > rootfs/etc/init.d/k3s-server <<'K3SEOF'
 #!/sbin/openrc-run
 # k3s: cp* runs server (reuse on-disk state, join peer, or cluster-init); wk* runs agent (join control plane from k3s-cp-nodes).
