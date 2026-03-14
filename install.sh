@@ -418,14 +418,27 @@ start_pre() {
     fi
 
     # Discover control plane by trying each k3s-cp-nodes hostname (relies on DNS / etc/hosts).
+    # Workers retry for JOIN_TIMEOUT seconds (control plane can take a long time to boot).
     JOIN_SERVER=""
-    for peer in $(cat /etc/k3s/k3s-cp-nodes 2>/dev/null); do
-        [ "$peer" = "$MYSELF" ] && continue
-        code=$(curl -k -s -o /dev/null --connect-timeout 3 -w "%{http_code}" "https://${peer}:6443" 2>/dev/null || true)
-        if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -ge 200 ] 2>/dev/null; then
-            JOIN_SERVER="$peer"
-            break
-        fi
+    JOIN_TIMEOUT=300
+    JOIN_INTERVAL=10
+    deadline=$(($(date +%s) + JOIN_TIMEOUT))
+    while true; do
+        for peer in $(cat /etc/k3s/k3s-cp-nodes 2>/dev/null); do
+            [ "$peer" = "$MYSELF" ] && continue
+            code=$(curl -k -s -o /dev/null --connect-timeout 3 -w "%{http_code}" "https://${peer}:6443" 2>/dev/null || true)
+            if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -ge 200 ] 2>/dev/null; then
+                JOIN_SERVER="$peer"
+                break 2
+            fi
+        done
+        case "$MYSELF" in
+            wk*) [ "$(date +%s)" -ge "$deadline" ] && break
+                 einfo "Control plane not ready; retrying in ${JOIN_INTERVAL}s..."
+                 sleep "$JOIN_INTERVAL"
+                 ;;
+            *)   break ;;
+        esac
     done
 
     case "$MYSELF" in
